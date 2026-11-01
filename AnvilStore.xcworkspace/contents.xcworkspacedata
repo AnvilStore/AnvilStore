@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Workspace version="1.0">
+    <FileRef location="group:Packages/AnvilTheme" />
+    <FileRef location="group:Packages/AnvilUI" />
+    <FileRef location="group:Packages/AnvilSources" />
+    <FileRef location="group:Packages/AnvilShell" />
+    <FileRef location="group:Packages/AnvilSetup" />
+    <FileRef location="group:Packages/AnvilAccounts" />
+    <FileRef location="group:Packages/AnvilInstall" />
+    <FileRef location="group:Packages/AnvilRefresh" />
+    <FileRef location="group:Packages/AnvilPatcher" />
+    <FileRef location="group:Packages/AnvilCutaway" />
+    <FileRef location="group:Packages/AnvilJIT" />
+    <FileRef location="group:Packages/AnvilDebug" />
+</Workspace>

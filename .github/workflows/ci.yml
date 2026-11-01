@@ -1,0 +1,153 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  DEVELOPER_DIR: /Applications/Xcode_16.4.app
+  SWIFT_STRICT_CONCURRENCY: complete
+  SWIFT_TREAT_WARNINGS_AS_ERRORS: "1"
+
+jobs:
+  build-and-test:
+    name: Build & Test (iOS ${{ matrix.ios-version }}, Xcode ${{ matrix.xcode }})
+    runs-on: macos-15
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # iOS 15 requires Xcode 16.x (iOS 15 SDK available in Xcode 16)
+          - ios-version: "15.5"
+            xcode: "16.4"
+            runtime: "iOS 15.5"
+            destination: "platform=iOS Simulator,name=iPhone 14,OS=15.5"
+          # iOS 17 requires Xcode 16.x (iOS 17 SDK available in Xcode 16)
+          - ios-version: "17.5"
+            xcode: "16.4"
+            runtime: "iOS 17.5"
+            destination: "platform=iOS Simulator,name=iPhone 16,OS=17.5"
+          # iOS 26 requires Xcode 26.x
+          - ios-version: "26.0"
+            xcode: "26.3"
+            runtime: "iOS 26.0"
+            destination: "platform=iOS Simulator,name=iPhone 16 Plus,OS=26.0"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode ${{ matrix.xcode }}
+        run: |
+          if [[ "${{ matrix.xcode }}" == "26.3" ]]; then
+            sudo xcode-select -s /Applications/Xcode_26.3_Release_Candidate.app
+          else
+            sudo xcode-select -s /Applications/Xcode_${{ matrix.xcode }}.app
+          fi
+          xcodebuild -version
+          xcrun simctl list runtimes
+
+      - name: Install iOS ${{ matrix.runtime }} simulator runtime
+        if: matrix.ios-version != '26.0'
+        run: |
+          # iOS 15.5 and 17.5 runtimes need to be downloaded on macOS-15
+          xcodebuild -downloadPlatform iOS -buildVersion "${{ matrix.runtime }}" -architectureVariant universal
+          xcrun simctl list runtimes | grep "${{ matrix.runtime }}"
+
+      - name: Install iOS 26.0 simulator runtime
+        if: matrix.ios-version == '26.0'
+        run: |
+          # iOS 26 runtime for Xcode 26
+          xcodebuild -downloadPlatform iOS -architectureVariant universal
+          xcrun simctl list runtimes | grep "26.0"
+
+      - name: Create simulator device
+        run: |
+          xcrun simctl create "TestDevice" "com.apple.CoreSimulator.SimDeviceType.iPhone-16-Plus" "${{ matrix.runtime }}"
+          xcrun simctl list devices | grep "TestDevice"
+
+      - name: Cache SwiftPM dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/org.swift.swiftpm
+            .build
+          key: ${{ runner.os }}-swift-${{ hashFiles('Package.swift', 'Packages/*/Package.swift') }}
+          restore-keys: |
+            ${{ runner.os }}-swift-
+
+      - name: Build all packages (SPM)
+        run: |
+          swift build --configuration debug
+
+      - name: Run package tests on iOS ${{ matrix.ios-version }} simulator
+        run: |
+          DEST="${{ matrix.destination }}"
+          echo "Testing on: $DEST"
+
+          # Test all packages with xcodebuild using the package scheme
+          # Swift Package targets are tested via: xcodebuild test -scheme <PackageName> -destination "$DEST"
+          for pkg in AnvilTheme AnvilUI AnvilSources AnvilShell AnvilSetup AnvilAccounts AnvilInstall AnvilRefresh AnvilPatcher AnvilCutaway AnvilJIT AnvilDebug; do
+            echo "Testing $pkg..."
+            xcodebuild test \
+              -scheme "$pkg" \
+              -destination "$DEST" \
+              -derivedDataPath .build/$pkg \
+              -quiet || exit 1
+          done
+
+      - name: Build AnvilStore app for iOS ${{ matrix.ios-version }}
+        if: matrix.ios-version == '26.0'
+        run: |
+          # Build the app target for iOS 26 (latest) to produce .ipa
+          # Use the AnvilStore scheme from the generated Xcode project
+          xcodebuild \
+            -scheme AnvilStore \
+            -configuration Release \
+            -destination "generic/platform=iOS" \
+            -archivePath .build/AnvilStore.xcarchive \
+            -derivedDataPath .build/AnvilStore \
+            -quiet \
+            archive
+
+          # Export unsigned IPA
+          xcodebuild \
+            -exportArchive \
+            -archivePath .build/AnvilStore.xcarchive \
+            -exportPath .build/ipa \
+            -exportOptionsPlist ExportOptions.plist \
+            -quiet
+
+      - name: Upload unsigned IPA
+        if: matrix.ios-version == '26.0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: AnvilStore-unsigned-ipa
+          path: .build/ipa/AnvilStore.ipa
+          retention-days: 7
+
+  lint:
+    name: SwiftLint / Format Check
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check swift-format
+        run: |
+          if command -v swift-format &> /dev/null; then
+            swift-format lint --recursive Packages Sources
+          else
+            echo "swift-format not installed, skipping"
+          fi
+
+  spm-resolve:
+    name: SwiftPM Resolve
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve dependencies
+        run: swift package resolve
+      - name: Check for unresolved dependencies
+        run: swift package show-dependencies --format json | jq -e '.dependencies[] | select(.state != "resolved")' && exit 1 || echo "All dependencies resolved"
