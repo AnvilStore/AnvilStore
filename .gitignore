@@ -1,1 +1,7 @@
 MODULE_1_SUMMARY.md
+.build/
+DerivedData/
+xcuserdata/
+.DS_Store
+.hermes/
+.claude/
