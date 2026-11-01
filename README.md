@@ -1,18 +1,22 @@
 <p align="center">
-  <img src="app-icon.png" width="128" alt="AnvilStore">
+  <img src="app-icon.png" width="180" alt="AnvilStore">
 </p>
 
-# AnvilStore
+<h1 align="center">AnvilStore</h1>
 
-**Sign, patch, and install iOS apps from your iPhone. No computer needed.**
+<p align="center">
+  <b>Sign, patch, and install iOS apps from your iPhone. No computer needed.</b>
+</p>
 
-![Platform](https://img.shields.io/badge/platform-iOS%2015%2B-lightgrey?style=for-the-badge&logo=apple)
-![License](https://img.shields.io/github/license/AnvilStore/AnvilStore?style=for-the-badge)
-![Stars](https://img.shields.io/github/stars/AnvilStore/AnvilStore?style=for-the-badge)
-![Status](https://img.shields.io/badge/status-early%20development-orange?style=for-the-badge)
+<p align="center">
+  <img src="https://img.shields.io/badge/platform-iOS%2015%2B-lightgrey?style=for-the-badge&logo=apple" alt="Platform">
+  <img src="https://img.shields.io/badge/version-0.1.0--dev-blue?style=for-the-badge" alt="Version">
+  <img src="https://img.shields.io/github/license/AnvilStore/AnvilStore?style=for-the-badge" alt="License">
+  <img src="https://img.shields.io/github/stars/AnvilStore/AnvilStore?style=for-the-badge" alt="Stars">
+  <img src="https://img.shields.io/badge/status-early%20development-orange?style=for-the-badge" alt="Status">
+</p>
 
-> [!CAUTION]
-> **Only get AnvilStore from this repository.** It's open source, so anyone can fork it, add code that steals your Apple ID, and reuse the name and icon. I don't publish builds anywhere else. If it didn't come from github.com/AnvilStore/AnvilStore, don't type your Apple ID into it.
+---
 
 ## What it is
 
