@@ -108,11 +108,17 @@ jobs:
           # Get the actual runtime identifier for the matrix runtime
           if [[ "${{ matrix.ios-version }}" == "26.0" ]]; then
             # Find the iOS 26 runtime (could be 26.0, 26.1, 26.2)
+            # The identifier format is: com.apple.CoreSimulator.SimRuntime.iOS-26-0
             RUNTIME_ID=$(xcrun simctl list runtimes | grep -E "iOS 26" | head -1 | sed -E 's/.*\(([^)]+)\).*/\1/')
-            DEST_RUNTIME="${{ matrix.runtime }}"
+            if [[ -z "$RUNTIME_ID" ]]; then
+              echo "ERROR: Could not extract runtime identifier"
+              exit 1
+            fi
+            echo "Extracted runtime ID: $RUNTIME_ID"
+            DEST_RUNTIME="platform=iOS Simulator,name=iPhone 16 Plus,OS=$RUNTIME_ID"
           else
             RUNTIME_ID="${{ matrix.runtime }}"
-            DEST_RUNTIME="${{ matrix.runtime }}"
+            DEST_RUNTIME="${{ matrix.destination }}"
           fi
           
           echo "Using runtime identifier: $RUNTIME_ID"
