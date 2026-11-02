@@ -32,7 +32,7 @@ You need:
 Steps:
 
 1. Fork the repo on GitHub.
-2. Clone your fork: `git clone https://github.com/<your username>/AnvilStore.git`
+2. Clone your fork: `git clone https://github.com/AnvilStore/AnvilStore.git`
 3. Resolve dependencies: `swift package resolve`
 4. Open the project in Xcode and build.
 5. Make and test your changes, then push a branch and open a pull request.
