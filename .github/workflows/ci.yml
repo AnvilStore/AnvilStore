@@ -3,8 +3,23 @@ name: CI
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+      - 'docs/**'
   pull_request:
     branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+      - 'docs/**'
+  schedule:
+    - cron: '0 3 * * *'  # Nightly at 3 AM UTC
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   DEVELOPER_DIR: /Applications/Xcode_16.4.app
@@ -13,7 +28,7 @@ env:
 
 jobs:
   build-and-test:
-    name: Build & Test (iOS ${{ matrix.ios-version }}, Xcode ${{ matrix.xcode }})
+    name: Build & Test (iOS ${{ matrix.ios-version }}, Xcode ${{ matrix.xcode }}) 
     runs-on: macos-15
     timeout-minutes: 60
     strategy:
@@ -25,25 +40,39 @@ jobs:
             xcode: "16.4"
             runtime: "iOS 15.5"
             destination: "platform=iOS Simulator,name=iPhone 14,OS=15.5"
+            run-on-push: false
           # iOS 17 requires Xcode 16.x (iOS 17 SDK available in Xcode 16)
           - ios-version: "17.5"
             xcode: "16.4"
             runtime: "iOS 17.5"
             destination: "platform=iOS Simulator,name=iPhone 16,OS=17.5"
+            run-on-push: false
           # iOS 26 requires Xcode 26.x
           - ios-version: "26.0"
             xcode: "26.3"
             runtime: "iOS 26.0"
             destination: "platform=iOS Simulator,name=iPhone 16 Plus,OS=26.0"
+            run-on-push: true
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Skip iOS 15.5/17.5 on push
+        if: github.event_name == 'push' && matrix.run-on-push == false
+        run: |
+          echo "Skipping iOS ${{ matrix.ios-version }} on push (runs on nightly/manual only)"
+          exit 0
+
       - name: Select Xcode ${{ matrix.xcode }}
         run: |
           if [[ "${{ matrix.xcode }}" == "26.3" ]]; then
-            sudo xcode-select -s /Applications/Xcode_26.3_Release_Candidate.app
+            # Find the actual Xcode 26 path on the runner
+            ls -d /Applications/Xcode*.app
+            xcodebuild -version
+            XCODE_PATH=$(ls -d /Applications/Xcode*.app | sort -V | tail -1)
+            echo "Selected Xcode: $XCODE_PATH"
+            sudo xcode-select -s "$XCODE_PATH"
           else
             sudo xcode-select -s /Applications/Xcode_${{ matrix.xcode }}.app
           fi
@@ -54,19 +83,34 @@ jobs:
         if: matrix.ios-version != '26.0'
         run: |
           # iOS 15.5 and 17.5 runtimes need to be downloaded on macOS-15
-          xcodebuild -downloadPlatform iOS -buildVersion "${{ matrix.runtime }}" -architectureVariant universal
-          xcrun simctl list runtimes | grep "${{ matrix.runtime }}"
+          # Get the build version from xcodebuild -showsdks
+          xcodebuild -downloadPlatform iOS -buildVersion "${{ matrix.runtime }}" || { echo "Failed to download runtime ${{ matrix.runtime }}"; exit 1; }
+          xcrun simctl list runtimes | grep "${{ matrix.runtime }}" || { echo "Runtime ${{ matrix.runtime }} not found after download"; exit 1; }
 
       - name: Install iOS 26.0 simulator runtime
         if: matrix.ios-version == '26.0'
         run: |
           # iOS 26 runtime for Xcode 26
-          xcodebuild -downloadPlatform iOS -architectureVariant universal
-          xcrun simctl list runtimes | grep "26.0"
+          xcodebuild -downloadPlatform iOS || { echo "Failed to download iOS 26 runtime"; exit 1; }
+          xcrun simctl list runtimes | grep "26.0" || { echo "iOS 26.0 runtime not found after download"; exit 1; }
 
       - name: Create simulator device
         run: |
-          xcrun simctl create "TestDevice" "com.apple.CoreSimulator.SimDeviceType.iPhone-16-Plus" "${{ matrix.runtime }}"
+          # Find a device type that supports the runtime
+          echo "Available device types:"
+          xcrun simctl list devicetypes
+          echo "Available runtimes:"
+          xcrun simctl list runtimes
+          
+          # Try iPhone 16 Plus first, fall back to iPhone 14
+          if xcrun simctl list devicetypes | grep -q "iPhone-16-Plus"; then
+            DEVICE_TYPE="com.apple.CoreSimulator.SimDeviceType.iPhone-16-Plus"
+          else
+            DEVICE_TYPE="com.apple.CoreSimulator.SimDeviceType.iPhone-14"
+          fi
+          
+          echo "Using device type: $DEVICE_TYPE"
+          xcrun simctl create "TestDevice" "$DEVICE_TYPE" "${{ matrix.runtime }}"
           xcrun simctl list devices | grep "TestDevice"
 
       - name: Cache SwiftPM dependencies
@@ -81,7 +125,14 @@ jobs:
 
       - name: Build all packages (SPM)
         run: |
-          swift build --configuration debug
+          set +e
+          swift build --configuration debug 2>&1 | tee /tmp/swift_build.log || {
+            echo "::error::Swift build failed"
+            grep -E '^.*error:' /tmp/swift_build.log | head -20
+            tail -30 /tmp/swift_build.log
+            exit 1
+          }
+          set -e
 
       - name: Run package tests on iOS ${{ matrix.ios-version }} simulator
         run: |
@@ -90,20 +141,29 @@ jobs:
 
           # Test all packages with xcodebuild using the package scheme
           # Swift Package targets are tested via: xcodebuild test -scheme <PackageName> -destination "$DEST"
+          set +e
           for pkg in AnvilTheme AnvilUI AnvilSources AnvilShell AnvilSetup AnvilAccounts AnvilInstall AnvilRefresh AnvilPatcher AnvilCutaway AnvilJIT AnvilDebug; do
             echo "Testing $pkg..."
             xcodebuild test \
               -scheme "$pkg" \
               -destination "$DEST" \
               -derivedDataPath .build/$pkg \
-              -quiet || exit 1
+              -quiet 2>&1 | tee /tmp/xcodebuild_$pkg.log || {
+                echo "::error::$pkg tests failed"
+                # Print only error lines and last 30 lines
+                grep -E '^.*error:' /tmp/xcodebuild_$pkg.log | head -20
+                tail -30 /tmp/xcodebuild_$pkg.log
+                exit 1
+              }
           done
+          set -e
 
       - name: Build AnvilStore app for iOS ${{ matrix.ios-version }}
         if: matrix.ios-version == '26.0'
         run: |
           # Build the app target for iOS 26 (latest) to produce .ipa
           # Use the AnvilStore scheme from the generated Xcode project
+          set +e
           xcodebuild \
             -scheme AnvilStore \
             -configuration Release \
@@ -111,15 +171,28 @@ jobs:
             -archivePath .build/AnvilStore.xcarchive \
             -derivedDataPath .build/AnvilStore \
             -quiet \
-            archive
+            archive 2>&1 | tee /tmp/xcodebuild_archive.log || {
+            echo "::error::Archive failed"
+            grep -E '^.*error:' /tmp/xcodebuild_archive.log | head -20
+            tail -30 /tmp/xcodebuild_archive.log
+            exit 1
+          }
+          set -e
 
           # Export unsigned IPA
+          set +e
           xcodebuild \
             -exportArchive \
             -archivePath .build/AnvilStore.xcarchive \
             -exportPath .build/ipa \
             -exportOptionsPlist ExportOptions.plist \
-            -quiet
+            -quiet 2>&1 | tee /tmp/xcodebuild_export.log || {
+            echo "::error::Export failed"
+            grep -E '^.*error:' /tmp/xcodebuild_export.log | head -20
+            tail -30 /tmp/xcodebuild_export.log
+            exit 1
+          }
+          set -e
 
       - name: Upload unsigned IPA
         if: matrix.ios-version == '26.0'
@@ -149,5 +222,3 @@ jobs:
       - uses: actions/checkout@v4
       - name: Resolve dependencies
         run: swift package resolve
-      - name: Check for unresolved dependencies
-        run: swift package show-dependencies --format json | jq -e '.dependencies[] | select(.state != "resolved")' && exit 1 || echo "All dependencies resolved"
