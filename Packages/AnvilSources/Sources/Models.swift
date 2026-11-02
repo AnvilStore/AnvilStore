@@ -1,5 +1,6 @@
 // AnvilStore — on-device iOS sideloading workstation
 // SPDX-License-Identifier: AGPL-3.0-only
+// CI trigger: ensure workflow runs on source changes
 
 import Foundation
 
