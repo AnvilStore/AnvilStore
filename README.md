@@ -18,7 +18,7 @@
 ---
 
 > [!CAUTION]
-> **Only get AnvilStore from this repository.** It's open source, so anyone can fork it, add code that steals your Apple ID, and reuse the name and icon. I don't publish builds anywhere else. If it didn't come from github.com/AnvilStore/AnvilStore, don't type your Apple ID into it.
+> **Only get AnvilStore from this repository.** It's open source, so anyone can fork it, add code that steals your Apple ID, and reuse the name and icon. I don't publish builds anywhere else than github.com/AnvilStore/AnvilStore. If it didn't come from github.com/AnvilStore/AnvilStore, don't type your Apple ID into it.
 
 ## What it is
 
