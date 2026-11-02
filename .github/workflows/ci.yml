@@ -28,41 +28,32 @@ env:
 
 jobs:
   build-and-test:
-    name: Build & Test (iOS ${{ matrix.ios-version }}, Xcode ${{ matrix.xcode }}) 
+    name: Build & Test (iOS ${{ matrix.ios-version }}, Xcode ${{ matrix.xcode }})
     runs-on: macos-15
     timeout-minutes: 60
+    if: github.event_name != 'push' || matrix.run-on-push == true
     strategy:
       fail-fast: false
       matrix:
         include:
-          # iOS 15 requires Xcode 16.x (iOS 15 SDK available in Xcode 16)
-          - ios-version: "15.5"
-            xcode: "16.4"
-            runtime: "iOS 15.5"
-            destination: "platform=iOS Simulator,name=iPhone 14,OS=15.5"
-            run-on-push: false
-          # iOS 17 requires Xcode 16.x (iOS 17 SDK available in Xcode 16)
-          - ios-version: "17.5"
-            xcode: "16.4"
-            runtime: "iOS 17.5"
-            destination: "platform=iOS Simulator,name=iPhone 16,OS=17.5"
-            run-on-push: false
-          # iOS 26 requires Xcode 26.x
+          # iOS 26 requires Xcode 26.x - runs on push
           - ios-version: "26.0"
             xcode: "26.3"
             runtime: "iOS 26.0"
             destination: "platform=iOS Simulator,name=iPhone 16 Plus,OS=26.0"
             run-on-push: true
+            test-on-simulator: true
+          # iOS 18.6 is pre-installed on macOS-15 runner - runs on push
+          - ios-version: "18.6"
+            xcode: "16.4"
+            runtime: "iOS 18.6"
+            destination: "platform=iOS Simulator,name=iPhone 16,OS=18.6"
+            run-on-push: true
+            test-on-simulator: true
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Skip iOS 15.5/17.5 on push
-        if: github.event_name == 'push' && matrix.run-on-push == false
-        run: |
-          echo "Skipping iOS ${{ matrix.ios-version }} on push (runs on nightly/manual only)"
-          exit 0
 
       - name: Select Xcode ${{ matrix.xcode }}
         run: |
@@ -73,14 +64,16 @@ jobs:
             XCODE_PATH=$(ls -d /Applications/Xcode*.app | sort -V | tail -1)
             echo "Selected Xcode: $XCODE_PATH"
             sudo xcode-select -s "$XCODE_PATH"
+            echo "DEVELOPER_DIR=$XCODE_PATH/Contents/Developer" >> $GITHUB_ENV
           else
             sudo xcode-select -s /Applications/Xcode_${{ matrix.xcode }}.app
+            echo "DEVELOPER_DIR=/Applications/Xcode_${{ matrix.xcode }}.app/Contents/Developer" >> $GITHUB_ENV
           fi
           xcodebuild -version
           xcrun simctl list runtimes
 
       - name: Install iOS ${{ matrix.runtime }} simulator runtime
-        if: matrix.ios-version != '26.0'
+        if: matrix.ios-version != '26.0' && matrix.ios-version != '18.6'
         run: |
           # iOS 15.5 and 17.5 runtimes need to be downloaded on macOS-15
           # Get the build version from xcodebuild -showsdks
@@ -97,7 +90,7 @@ jobs:
           # Check for iOS 26 (could be 26.0, 26.1, 26.2)
           xcrun simctl list runtimes | grep -E "iOS 26" || { echo "iOS 26 runtime not found after download"; exit 1; }
 
-      - name: Create simulator device
+      - name: Create and boot simulator device
         run: |
           # Find a device type that supports the runtime
           echo "Available device types:"
@@ -115,10 +108,16 @@ jobs:
               exit 1
             fi
             echo "Extracted runtime ID: $RUNTIME_ID"
-            DEST_RUNTIME="platform=iOS Simulator,name=iPhone 16 Plus,OS=$RUNTIME_ID"
+          elif [[ "${{ matrix.ios-version }}" == "18.6" ]]; then
+            # Find the iOS 18.6 runtime
+            RUNTIME_ID=$(xcrun simctl list runtimes | grep -E "iOS 18\.6" | head -1 | sed -E 's/.*\(([^)]+)\).*/\1/')
+            if [[ -z "$RUNTIME_ID" ]]; then
+              echo "ERROR: Could not extract iOS 18.6 runtime identifier"
+              exit 1
+            fi
+            echo "Extracted runtime ID: $RUNTIME_ID"
           else
             RUNTIME_ID="${{ matrix.runtime }}"
-            DEST_RUNTIME="${{ matrix.destination }}"
           fi
           
           echo "Using runtime identifier: $RUNTIME_ID"
@@ -131,11 +130,24 @@ jobs:
           fi
           
           echo "Using device type: $DEVICE_TYPE"
-          xcrun simctl create "TestDevice" "$DEVICE_TYPE" "$RUNTIME_ID"
-          xcrun simctl list devices | grep "TestDevice"
           
-          # Update destination to use the actual runtime
-          echo "DESTINATION_RUNTIME=$DEST_RUNTIME" >> $GITHUB_ENV
+          # Create simulator and capture UDID
+          UDID=$(xcrun simctl create "TestDevice" "$DEVICE_TYPE" "$RUNTIME_ID" | grep -oE '[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}')
+          if [[ -z "$UDID" ]]; then
+            echo "ERROR: Failed to create simulator"
+            exit 1
+          fi
+          echo "Created simulator UDID: $UDID"
+          
+          # Boot the simulator
+          xcrun simctl boot "$UDID"
+          echo "Booted simulator"
+          
+          # Wait for boot to complete
+          xcrun simctl bootstatus "$UDID" -b
+          
+          # Update destination to use the simulator UDID
+          echo "DESTINATION_UDID=$UDID" >> $GITHUB_ENV
 
       - name: Cache SwiftPM dependencies
         uses: actions/cache@v4
@@ -160,9 +172,9 @@ jobs:
 
       - name: Run package tests on iOS ${{ matrix.ios-version }} simulator
         run: |
-          # Use the actual runtime identifier from the create step
-          if [[ -n "${DESTINATION_RUNTIME}" ]]; then
-            DEST="${DESTINATION_RUNTIME}"
+          # Use the actual simulator UDID from the create step
+          if [[ -n "${DESTINATION_UDID}" ]]; then
+            DEST="id=${DESTINATION_UDID}"
           else
             DEST="${{ matrix.destination }}"
           fi
@@ -188,7 +200,7 @@ jobs:
           set -e
 
       - name: Build AnvilStore app for iOS ${{ matrix.ios-version }}
-        if: matrix.ios-version == '26.0'
+        if: matrix.ios-version == '26.0' || matrix.ios-version == '18.6'
         run: |
           # Build the app target for iOS 26 (latest) to produce .ipa
           # Use the AnvilStore scheme from the generated Xcode project
@@ -224,10 +236,10 @@ jobs:
           set -e
 
       - name: Upload unsigned IPA
-        if: matrix.ios-version == '26.0'
+        if: matrix.ios-version == '26.0' || matrix.ios-version == '18.6'
         uses: actions/upload-artifact@v4
         with:
-          name: AnvilStore-unsigned-ipa
+          name: AnvilStore-unsigned-ipa-${{ matrix.ios-version }}
           path: .build/ipa/AnvilStore.ipa
           retention-days: 7
 
@@ -243,6 +255,41 @@ jobs:
           else
             echo "swift-format not installed, skipping"
           fi
+
+  compile-ios15:
+    name: Compile Check (iOS 15.0 Deployment Target)
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select Xcode 16.4
+        run: |
+          sudo xcode-select -s /Applications/Xcode_16.4.app
+          xcodebuild -version
+      - name: Cache SwiftPM dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/org.swift.swiftpm
+            .build
+          key: ${{ runner.os }}-swift-ios15-${{ hashFiles('Package.swift', 'Packages/*/Package.swift') }}
+          restore-keys: |
+            ${{ runner.os }}-swift-ios15-
+      - name: Build all packages for iOS 15 (generic)
+        run: |
+          set +e
+          xcodebuild \
+            -scheme AnvilTheme \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath .build/ios15 \
+            IPHONEOS_DEPLOYMENT_TARGET=15.0 \
+            -quiet 2>&1 | tee /tmp/ios15_build.log || {
+            echo "::error::iOS 15 compile failed"
+            grep -E '^.*error:' /tmp/ios15_build.log | head -20
+            tail -30 /tmp/ios15_build.log
+            exit 1
+          }
+          set -e
 
   spm-resolve:
     name: SwiftPM Resolve
