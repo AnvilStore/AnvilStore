@@ -92,7 +92,10 @@ jobs:
         run: |
           # iOS 26 runtime for Xcode 26
           xcodebuild -downloadPlatform iOS || { echo "Failed to download iOS 26 runtime"; exit 1; }
-          xcrun simctl list runtimes | grep "26.0" || { echo "iOS 26.0 runtime not found after download"; exit 1; }
+          echo "Available runtimes after download:"
+          xcrun simctl list runtimes
+          # Check for iOS 26 (could be 26.0, 26.1, 26.2)
+          xcrun simctl list runtimes | grep -E "iOS 26" || { echo "iOS 26 runtime not found after download"; exit 1; }
 
       - name: Create simulator device
         run: |
@@ -102,6 +105,18 @@ jobs:
           echo "Available runtimes:"
           xcrun simctl list runtimes
           
+          # Get the actual runtime identifier for the matrix runtime
+          if [[ "${{ matrix.ios-version }}" == "26.0" ]]; then
+            # Find the iOS 26 runtime (could be 26.0, 26.1, 26.2)
+            RUNTIME_ID=$(xcrun simctl list runtimes | grep -E "iOS 26" | head -1 | sed -E 's/.*\(([^)]+)\).*/\1/')
+            DEST_RUNTIME="${{ matrix.runtime }}"
+          else
+            RUNTIME_ID="${{ matrix.runtime }}"
+            DEST_RUNTIME="${{ matrix.runtime }}"
+          fi
+          
+          echo "Using runtime identifier: $RUNTIME_ID"
+          
           # Try iPhone 16 Plus first, fall back to iPhone 14
           if xcrun simctl list devicetypes | grep -q "iPhone-16-Plus"; then
             DEVICE_TYPE="com.apple.CoreSimulator.SimDeviceType.iPhone-16-Plus"
@@ -110,8 +125,11 @@ jobs:
           fi
           
           echo "Using device type: $DEVICE_TYPE"
-          xcrun simctl create "TestDevice" "$DEVICE_TYPE" "${{ matrix.runtime }}"
+          xcrun simctl create "TestDevice" "$DEVICE_TYPE" "$RUNTIME_ID"
           xcrun simctl list devices | grep "TestDevice"
+          
+          # Update destination to use the actual runtime
+          echo "DESTINATION_RUNTIME=$DEST_RUNTIME" >> $GITHUB_ENV
 
       - name: Cache SwiftPM dependencies
         uses: actions/cache@v4
@@ -136,7 +154,12 @@ jobs:
 
       - name: Run package tests on iOS ${{ matrix.ios-version }} simulator
         run: |
-          DEST="${{ matrix.destination }}"
+          # Use the actual runtime identifier from the create step
+          if [[ -n "${DESTINATION_RUNTIME}" ]]; then
+            DEST="${DESTINATION_RUNTIME}"
+          else
+            DEST="${{ matrix.destination }}"
+          fi
           echo "Testing on: $DEST"
 
           # Test all packages with xcodebuild using the package scheme
