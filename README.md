@@ -70,3 +70,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 ## License
 
 AGPL-3.0. See [LICENSE](LICENSE).
+# CI trigger
